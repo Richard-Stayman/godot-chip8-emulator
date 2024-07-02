@@ -99,6 +99,7 @@ var memory = [] # 4kb (4096 bytes); each entry here is an integer representation
 var V = [] # 16 registers (called V0-VF)
 var I = 0 # address pointer (16 bit) (but only 12 bits are going to be used)
 var pc = 0x200 # program counter (starts at memory location 0x200 h or 512 d)
+var temp
 
 # stack
 var stack = [] # stack (current implementation is 16 levels)
@@ -130,7 +131,7 @@ var romDescription = "" # current ROM description (if available)
 func _ready():
 	randomize()
 	loadAvailableROMs()
-	
+
 	# connect interface signals
 	ROMSelector.connect("item_selected", self, "on_item_selected")
 	ButtonRandomGame.connect("pressed", self, "loadRandomROM")
@@ -203,7 +204,7 @@ func _ready():
 	# pick a random ROM at startup
 	if (randomRomAtStartup):
 		loadRandomROM()
-	
+
 	playAppear()
 	playBackgroundNoise()
 
@@ -257,15 +258,15 @@ func _process(delta):
 	FPSLabel.visible = showFPS
 	if (showFPS):
 		FPSLabel.set_text("FPS: " + str(Engine.get_frames_per_second()))
-	
+
 	# post processing feature
 	CRTShader.visible = useShader
 
 	if (!running):
 		return
-	
+
 	#setKeyBuffer()
-	
+
 	# process opcodes
 	var opcode = ((memory[pc] << 8) | memory[pc + 1])
 
@@ -350,65 +351,69 @@ func _process(delta):
 			#print("Set V[", x, "] to ", V[x], " | ", V[y], " = ", (V[x] | V[y]))
 			V[x] = ((V[x] | V[y]) & 0xFF)
 			pc += 2
+			V[0xF] = 0
 		elif (lsn == 0x0002): # 8XY2: Sets VX to VX and VY.
 			var x = (opcode & 0x0F00) >> 8
 			var y = (opcode & 0x00F0) >> 4
 			#print("Set V[", x, "] to ", V[x], " & ", V[y], " = ", (V[x] & V[y]))
 			V[x] = (V[x] & V[y])
 			pc += 2
+			V[0xF] = 0
 		elif (lsn == 0x0003): # 8XY3: Sets VX to VX xor VY.
 			var x = (opcode & 0x0F00) >> 8
 			var y = (opcode & 0x00F0) >> 4
 			#print("Set V[", x, "] to ", V[x], " ^ ", V[y], " = ", (V[x] ^ V[y]))
 			V[x] = ((V[x] ^ V[y]) & 0xFF)
 			pc += 2
+			V[0xF] = 0
 		elif (lsn == 0x0004): # 8XY4: Adds VY to VX. VF is set to 1 when there's a carry, and to 0 when there isn't.
 			var x = (opcode & 0x0F00) >> 8
 			var y = (opcode & 0x00F0) >> 4
 			#print("Adding V[", y, "] to V[", y, "] = ", ((V[x] + V[y]) & 0xFF), ", Apply Carry if needed")
-			if (V[y] > 255 - V[x]):
+			V[x] = ((V[x] + V[y]) & 0xFF)
+			if (V[y] >= V[x]):
 				V[0xF] = 1
 			else:
 				V[0xF] = 0
-
-			V[x] = ((V[x] + V[y]) & 0xFF)
-
 			pc += 2
 		elif (lsn == 0x0005): # 8XY5: VY is subtracted from VX. VF is set to 0 when there's a borrow, and 1 when there isn't.
 			var x = (opcode & 0x0F00) >> 8
 			var y = (opcode & 0x00F0) >> 4
 			#print("Subtracting V[", y, "] from V[", x, "] = ", ((V[x] - V[y]) & 0xFF), ", Apply Borrow if needed, ")
-			if (V[x] > V[y]):
-				V[0xF] = 1
+			if (V[x] >= V[y]):
+				temp = 1
 				#print("No Borrow")
 			else:
-				V[0xF] = 0
+				temp = 0
 				#print("Borrow")
-
 			V[x] = ((V[x] - V[y]) & 0xFF)
+			V[0xF] = temp
 			pc += 2
 		elif (lsn == 0x0006): # 8XY6: Shifts VX right by one. VF is set to the value of the least significant bit of VX before the shift.[2]
 			var x = (opcode & 0x0F00) >> 8
-			V[0xF] = (V[x] & 0x1)
+			var y = (opcode & 0x00F0) >> 4
+			V[x] = V[y]
+			temp = (V[x] & 0x1)
 			V[x] = (V[x] >> 1)
+			V[0xF] = temp
 			pc += 2
 			#print("Shift V[", x, "] >> 1 and VF to LSB of VX")
 		elif (lsn == 0x0007): # 8XY7: Sets VX to VY minus VX. VF is set to 0 when there's a borrow, and 1 when there isn't.
 			var x = (opcode & 0x0F00) >> 8
 			var y = (opcode & 0x00F0) >> 4
-
 			if (V[x] > V[y]): # borrow
-				V[0xF] = 0
+				temp = 0
 			else:
-				V[0xF] = 1
-
+				temp = 1
 			V[x] = ((V[y] - V[x]) & 0xFF)
-
+			V[0xF] = temp
 			pc += 2
 		elif (lsn == 0x000E): # 8XYE: Shifts VX left by one. VF is set to the value of the most significant bit of VX before the shift.[2]
 			var x = (opcode & 0x0F00) >> 8
-			V[0xF] = (V[x] & 0x80)
-			V[x] = (V[x] << 1)
+			var y = (opcode & 0x00F0) >> 4
+			temp = (V[x] >> 7) & 0x1
+			V[x] = (V[y] << 1 & 0xFF)
+			V[0xF] = temp
 			pc += 2
 			#print("Shift V[", x, "] << 1 and VF to MSB of VX")
 		else:
@@ -418,7 +423,6 @@ func _process(delta):
 	elif (msn == 0x9000): # 9XY0: Skips the next instruction if VX doesn't equal VY.
 		var x = (opcode & 0x0F00) >> 8
 		var y = (opcode & 0x00F0) >> 4
-		
 		if (V[x] != V[y]):
 			pc += 4
 			#print("Skipping next instruction (V[", x, "] =/= V[", y, "])")
@@ -447,9 +451,9 @@ func _process(delta):
 		var x = V[(opcode & 0x0F00) >> 8]
 		var y = V[(opcode & 0x00F0) >> 4]
 		var height = opcode & 0x000F
-		
+
 		V[0xF] = 0
-		
+
 		for _y in range(height):
 			var line = memory[I + _y]
 			for _x in range(8):
@@ -467,7 +471,7 @@ func _process(delta):
 						V[0xF] = 1
 
 					display[index] ^= 1
-		
+
 		pc += 2
 		needRedraw = true
 		#print("Drawing at V[", int(V[(opcode & 0x0F00) >> 8]), "] = ", int(x), ", V[", int(V[(opcode & 0x00F0) >> 4]), "] = ", int(y))
@@ -492,7 +496,7 @@ func _process(delta):
 			playError()
 			print("Unexisting opcode")
 			return
-	elif (msn == 0xF000): 
+	elif (msn == 0xF000):
 		var lsb = opcode & 0x00FF
 		if (lsb == 0x0007): # FX07: Sets VX to the value of delay timer
 			var x = (opcode & 0x0F00) >> 8
@@ -525,7 +529,7 @@ func _process(delta):
 		elif (lsb == 0x0033): # FX33: Store a binary-coded decimal value VX in I, I + 1 and I + 2
 			var x = (opcode & 0x0F00) >> 8
 			var value = V[x]
-			
+
 			var hundreds = (value - (value % 100)) / 100
 			value -= hundreds * 100
 			var tens = (value - (value % 10)) / 10
@@ -627,7 +631,7 @@ func initChip8():
 	V.resize(vSize)
 	for i in range(vSize):
 		V[i] = 0
-	
+
 	var kSize = 16
 	keys.resize(kSize)
 	for i in range(kSize):
@@ -764,7 +768,7 @@ func loadAvailableROMs():
 	else:
 		playError()
 		print("An error occurred when trying to access the path.")
-	
+
 	# fill and connect UI
 	for i in range(availableROMs.size()):
 		ROMSelector.add_item(availableROMs[i])
